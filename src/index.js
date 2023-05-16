@@ -7,8 +7,16 @@ require('dotenv').config();
 const db = new Database();
 const filePath = process.env.FILE_PATH;
 const fontPath = process.env.FONT_PATH;
-const fileName = 'completion.png';
-const completeFilePath = path.join(filePath, fileName);
+const users = [
+    { 
+        user_id: 1023489,
+        date: "2011-08-11",
+    },
+    { 
+        user_id: 9991650,
+        date: "2014-01-26",
+    },
+]
 
 if (fontPath) {
   console.log(fontPath)
@@ -17,8 +25,9 @@ if (fontPath) {
 
 const font = 'Aller';
 
-async function fetchData() {
-    await db.connect();
+async function fetchData(user) {
+    const year = new Date(user.date).getFullYear()
+    
     const packs_query = `
     SELECT
     CAST(REPLACE(pack_id, 'S', '') AS INTEGER) AS pack_number,
@@ -27,10 +36,10 @@ async function fetchData() {
   FROM 
     beatmap_packs 
     LEFT JOIN beatmaps ON beatmaps.beatmap_id = beatmap_packs.beatmap_id
-    LEFT JOIN scores ON scores.beatmap_id = beatmaps.beatmap_id AND scores.user_id = 1023489
+    LEFT JOIN scores ON scores.beatmap_id = beatmaps.beatmap_id AND scores.user_id = ${user.user_id}
   WHERE 
     pack_id ~ '^S\\d+$' AND 
-    CAST(REPLACE(pack_id, 'S', '') AS INTEGER) BETWEEN 1 AND 200
+    approved_date <= '${user.date}'
     AND mode = 0 AND approved in (1,2)
   GROUP BY 
     pack_id
@@ -39,18 +48,25 @@ async function fetchData() {
     `
     const packs_rows = await db.query(packs_query);
 
-    const packs_compltion_query = `
+    const approved_packs_query = `
     SELECT
+    CAST(REPLACE(pack_id, 'SA', '') AS INTEGER) AS pack_number,
     COUNT(DISTINCT scores.beatmap_id) AS scores_count,
-    COUNT(DISTINCT beatmaps.beatmap_id) AS beatmap_count
-    FROM beatmaps
-    LEFT JOIN scores ON scores.beatmap_id = beatmaps.beatmap_id AND scores.user_id = 1023489
-    LEFT JOIN beatmap_packs ON beatmap_packs.beatmap_id = beatmaps.beatmap_id
-    WHERE mode = 0 AND approved in (1,2)
-    AND pack_id ~ '^S\\d+$' AND 
-    CAST(REPLACE(pack_id, 'S', '') AS INTEGER) BETWEEN 1 AND 200`
+    COUNT(DISTINCT beatmap_packs.beatmap_id) AS beatmap_count
+  FROM 
+    beatmap_packs 
+    LEFT JOIN beatmaps ON beatmaps.beatmap_id = beatmap_packs.beatmap_id
+    LEFT JOIN scores ON scores.beatmap_id = beatmaps.beatmap_id AND scores.user_id = ${user.user_id}
+  WHERE 
+    pack_id ~ '^SA\\d+$' 
+    AND mode = 0
+  GROUP BY 
+    pack_id
+  ORDER BY 
+    pack_number
+    `
 
-    const packs_completion_rows = await db.query(packs_compltion_query);
+    const approved_packs_rows = await db.query(approved_packs_query);
 
     const years_query = `
     SELECT
@@ -59,9 +75,9 @@ async function fetchData() {
     COUNT(DISTINCT beatmaps.beatmap_id) AS beatmap_count
   FROM
     beatmaps
-    LEFT JOIN scores ON scores.beatmap_id = beatmaps.beatmap_id AND scores.user_id = 1023489
+    LEFT JOIN scores ON scores.beatmap_id = beatmaps.beatmap_id AND scores.user_id = ${user.user_id}
   WHERE
-    EXTRACT(YEAR FROM beatmaps.approved_date) BETWEEN 2007 AND 2011
+    EXTRACT(YEAR FROM beatmaps.approved_date) BETWEEN 2007 AND ${year}
     AND mode = 0 AND approved IN (1,2)
   GROUP BY
     year
@@ -75,29 +91,31 @@ async function fetchData() {
     COUNT(DISTINCT scores.beatmap_id) AS scores_count,
     COUNT(DISTINCT beatmaps.beatmap_id) AS beatmap_count
     FROM beatmaps
-    LEFT JOIN scores ON scores.beatmap_id = beatmaps.beatmap_id AND scores.user_id = 1023489
+    LEFT JOIN scores ON scores.beatmap_id = beatmaps.beatmap_id AND scores.user_id = ${user.user_id}
     LEFT JOIN beatmap_packs ON beatmap_packs.beatmap_id = beatmaps.beatmap_id
     WHERE mode = 0 AND approved in (1,2)
-    AND approved_date < '2011-08-11'`
+    AND approved_date <= '${user.date}'`
 
     const completion_rows = await db.query(compltion_query);
-
-    await db.disconnect();
     
-    const data = { beatmap_packs: {} };
+    const data = { beatmap_packs: [] };
     for (let i = 0; i < packs_rows.length; i++) {
       const row = packs_rows[i];
-      const packId = row.pack_number;
-      data.beatmap_packs[packId] = {
+      data.beatmap_packs.push({
+        pack_id: row.pack_number,
         scores_count: row.scores_count,
         beatmap_count: row.beatmap_count,
-      };
+      });
     }
 
-    const packs_completion_row = packs_completion_rows[0]
-    data.packs_completion = {
-      scores_count: packs_completion_row.scores_count,
-      beatmap_count: packs_completion_row.beatmap_count,
+    data.approved_packs = []
+    for (let i = 0; i < approved_packs_rows.length; i++) {
+      const row = approved_packs_rows[i];
+      data.approved_packs.push({
+        pack_id: row.pack_number,
+        scores_count: row.scores_count,
+        beatmap_count: row.beatmap_count,
+      });
     }
 
     data.years = []
@@ -143,33 +161,6 @@ function defineRoundedRect(ctx, x, y, width, height, radius) {
     ctx.closePath();
 }
 
-function drawHeader(ctx) {
-    const headerText = 'Join Date Completion';
-    const headerFontSize = 72;
-    const headerFontColor = 'white';
-    const headerFont = `bold ${headerFontSize}px ${font}`;
-
-    // Save the current shadow settings
-    const { shadowBlur, shadowColor, shadowOffsetX, shadowOffsetY } = ctx;
-
-    // Set the shadow effect for the header text
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = 'black';
-    ctx.shadowOffsetX = 4;
-    ctx.shadowOffsetY = 4;
-
-    ctx.font = headerFont;
-    ctx.fillStyle = headerFontColor;
-    ctx.textAlign = 'center';
-    ctx.fillText(headerText, 890, 100);
-
-    // Reset the shadow settings
-    ctx.shadowBlur = shadowBlur;
-    ctx.shadowColor = shadowColor;
-    ctx.shadowOffsetX = shadowOffsetX;
-    ctx.shadowOffsetY = shadowOffsetY;
-}
-
 function drawPackCompletion(ctx) {
     const headerText = 'Beatmap Packs';
     const headerFontSize = 42;
@@ -188,7 +179,7 @@ function drawPackCompletion(ctx) {
     ctx.font = headerFont;
     ctx.fillStyle = headerFontColor;
     ctx.textAlign = 'center';
-    ctx.fillText(headerText, 445, 170);
+    ctx.fillText(headerText, 445, 40);
   
     // Reset the shadow settings
     ctx.shadowBlur = shadowBlur;
@@ -215,7 +206,7 @@ function drawYears(ctx) {
     ctx.font = headerFont;
     ctx.fillStyle = headerFontColor;
     ctx.textAlign = 'center';
-    ctx.fillText(headerText, 1335, 170);
+    ctx.fillText(headerText, 1335, 40);
   
     // Reset the shadow settings
     ctx.shadowBlur = shadowBlur;
@@ -224,7 +215,7 @@ function drawYears(ctx) {
     ctx.shadowOffsetY = shadowOffsetY;
 }
 
-function drawDivider(ctx,) {
+function drawDivider(ctx, height) {
     const { shadowBlur, shadowColor, shadowOffsetX, shadowOffsetY } = ctx;
   
     // Set the shadow effect for the line
@@ -235,8 +226,8 @@ function drawDivider(ctx,) {
   
     // Draw the line
     ctx.beginPath();
-    ctx.moveTo(890, 150);
-    ctx.lineTo(890, 700);
+    ctx.moveTo(890, 20);
+    ctx.lineTo(890, height);
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'white';
     ctx.stroke();
@@ -248,49 +239,27 @@ function drawDivider(ctx,) {
     ctx.shadowOffsetY = shadowOffsetY;
 }
   
-function drawPackSquares(ctx, data) {
-    const boxWidth = 32;
-    const boxHeight = 32;
-    const gap = 5;
-    const rows = 10;
-    const cols = 20;
-    const startX = (890 - (cols * (boxWidth + gap)) + gap) / 2 + 40;
-    const startY = 200;
-    const labelGap = 10;
+function drawPackSquares(ctx, data, approved_data) {
+    const boxWidth = 28;
+    const boxHeight = boxWidth;
+    const gap = 4;
+    const rows = Math.ceil(data.length / 25);
+    const cols = 25;
+    const startX = (890 - (cols * (boxWidth + gap)) + gap) / 2;
+    const startY = 70;
     const size = 32;
+
+    const { shadowBlur, shadowColor, shadowOffsetX, shadowOffsetY } = ctx;
   
     for (let row = 0; row < rows; row++) {
-        const rowStart = row * cols + 1;
-        const rowEnd = rowStart + cols - 1;
-        const labelX = startX - labelGap;
-        const labelY = startY + row * (boxHeight + gap) + boxHeight / 2 + 6;
-
-        const { shadowBlur, shadowColor, shadowOffsetX, shadowOffsetY } = ctx;
-
-        // Set the shadow effect for the line
-        ctx.shadowBlur = 3;
-        ctx.shadowColor = 'black';
-        ctx.shadowOffsetX = 2;
-        ctx.shadowOffsetY = 2;
-
-        // Draw the row label
-        ctx.font = `bold 18px ${font}`;
-        ctx.fillStyle = 'white';
-        ctx.textAlign = 'right';
-        ctx.fillText(`${rowStart}-${rowEnd}`, labelX, labelY);
-
-        // Reset the shadow settings
-        ctx.shadowBlur = shadowBlur;
-        ctx.shadowColor = shadowColor;
-        ctx.shadowOffsetX = shadowOffsetX;
-        ctx.shadowOffsetY = shadowOffsetY;
 
         for (let col = 0; col < cols; col++) {
             const x = startX + col * (boxWidth + gap);
             const y = startY + row * (boxHeight + gap);
-            const packNumber = row * cols + col + 1;
+            const packNumber = row * cols + col;
             const packData = data[packNumber];
             const scorePercent = packData?.beatmap_count ? packData.scores_count / packData.beatmap_count : 0;
+            if (!packData) continue;
 
             // Draw the square
             ctx.fillStyle = `hsl(${scorePercent * 115}, 80%, 50%)`;
@@ -308,128 +277,77 @@ function drawPackSquares(ctx, data) {
             ctx.fill();
 
             // Draw the pack number on top of the square
-            // ctx.fillStyle = 'black';
-            // ctx.font = `16px ${font}`;
-            // ctx.textAlign = 'center';
-            // ctx.fillText(packNumber, x + boxWidth/2, y + boxHeight/2 + 2);
+            ctx.shadowBlur = 3;
+            ctx.shadowColor = 'black';
+            ctx.shadowOffsetX = 1;
+            ctx.shadowOffsetY = 1;
+
+            ctx.fillStyle = 'white';
+            ctx.font = `${packData.pack_id > 999 ? "12px" : "16px"} ${font}`;
+            ctx.textAlign = 'center';
+            ctx.fillText(packData.pack_id, x + boxWidth/2 - 1, y + boxHeight/2 + 4);
+
+            ctx.shadowBlur = shadowBlur;
+            ctx.shadowColor = shadowColor;
+            ctx.shadowOffsetX = shadowOffsetX;
+            ctx.shadowOffsetY = shadowOffsetY;
 
         }
     }
+
+    // Draw the final row with approved packs
+    const finalRowY = startY + rows * (boxHeight + gap);
+
+    for (let col = 0; col < cols; col++) {
+      const x = startX + col * (boxWidth + gap);
+      const approvedPack = approved_data[col];
+      const scorePercent = approvedPack?.beatmap_count ? approvedPack.scores_count / approvedPack.beatmap_count : 0;
+      if (!approvedPack) continue;
+
+      // Draw the square
+      ctx.fillStyle = `hsl(${scorePercent * 115}, 80%, 50%)`;
+      defineRoundedRect(ctx, x, finalRowY, boxWidth, boxHeight, 5);
+      ctx.fill();
+
+      // create a gradient for the reflection
+      const gradient = ctx.createLinearGradient(x, finalRowY, x, finalRowY + size);
+
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  
+      // fill the square with the gradient
+      ctx.fillStyle = gradient;
+      ctx.fill();
+  
+      // Draw the pack number on top of the square
+      ctx.shadowBlur = 3;
+      ctx.shadowColor = 'black';
+      ctx.shadowOffsetX = 1;
+      ctx.shadowOffsetY = 1;
+  
+      ctx.fillStyle = 'white';
+      ctx.font = `15px ${font}`;
+      ctx.textAlign = 'center';
+      ctx.fillText("A" + approvedPack.pack_id, x + boxWidth/2, finalRowY + boxHeight/2 + 5);
+  
+      ctx.shadowBlur = shadowBlur;
+      ctx.shadowColor = shadowColor;
+      ctx.shadowOffsetX = shadowOffsetX;
+      ctx.shadowOffsetY = shadowOffsetY;
+  }
 }
 
-function drawPacksProgressbar(ctx, data) {
-    const completionPercentage = data.scores_count / data.beatmap_count * 100;
-    const hue = completionPercentage / 100 * 115;
-
-    // Define the progress bar dimensions
-    const barWidth = 890 * 0.917;
+function drawYearsProgressbars(ctx, yearsData, totalHeight) {
+    const startX = 994;
+    const startY = 70;
+    const barWidth = 738;
+    const barCount = yearsData.length;
     const barHeight = 32;
-    const barX = (890 - barWidth) / 2;
-    const barY = 630 - barHeight ;
-    const filledWidth = (barWidth * completionPercentage) / 100;
+    const totalBarsHeight = barCount * barHeight;
+    const remainingHeight = totalHeight - totalBarsHeight;
+    const barMargin = remainingHeight / (barCount - 1);
 
-    // Set up the shadow effect for the progress bar background
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-    ctx.shadowBlur = 1;
-
-    // Draw the progress bar background with rounded corners
-    defineRoundedRect(ctx, barX, barY, barWidth, barHeight, 5);
-    ctx.fill();
-
-    // Reset the shadow settings
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-
-    // Draw the filled progress bar
-    ctx.fillStyle = `hsl(${hue}, 80%, 50%)`;
-    defineRoundedRect(ctx, barX, barY, filledWidth, barHeight, 5);
-    ctx.fill();
-
-    // Define the gradient for the filled progress bar
-    const gradient = ctx.createLinearGradient(barX, barY, barX, barY + barHeight);
-    gradient.addColorStop(0, 'hsla(0, 0%, 100%, 0.3)');
-    gradient.addColorStop(0.5, 'hsla(0, 0%, 100%, 0)');
-    gradient.addColorStop(1, 'hsla(0, 0%, 100%, 0.3)');
-
-    // Draw the reflection gradient
-    ctx.fillStyle = gradient;
-    defineRoundedRect(ctx, barX, barY, filledWidth, barHeight, 5);
-    ctx.fill();
-
-    // Draw the text with shadow in the middle of the progress bar
-    const text = `${completionPercentage.toFixed(2)}% ~ ${formatNumber(data.scores_count)} / ${formatNumber(data.beatmap_count)}`;
-    const textX = barX + barWidth / 2;
-    const textY = barY + barHeight / 2;
-
-    ctx.font = `bold 22px ${font}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    // Set up the shadow effect for the text
-    ctx.shadowColor = 'black';
-    ctx.shadowOffsetX = 2;
-    ctx.shadowOffsetY = 2;
-    ctx.shadowBlur = 3;
-
-    // Draw the text
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(text, textX, textY);
-
-    // Reset the shadow settings
-    ctx.shadowColor = 'transparent';
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.shadowBlur = 0;
-}
-
-function drawLegend(ctx) {
-    // Set up the shadow effect for the text
-    ctx.shadowColor = 'black';
-    ctx.shadowOffsetX = 2;
-    ctx.shadowOffsetY = 2;
-    ctx.shadowBlur = 4;
-
-    // Draw the text
-    ctx.font = `bold 25px ${font}`;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText("Less Clears", 120, 680);
-    ctx.fillText("More Clears", 750, 680);
-
-    // Reset the shadow settings
-    ctx.shadowColor = 'transparent';
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.shadowBlur = 0;
-
-    const squares = [
-        {x: 240, hue: 0},
-        {x: 360, hue: 28},
-        {x: 480, hue: 57},
-        {x: 600, hue: 115}
-    ]
-
-    for (const square of squares) {
-        ctx.fillStyle = `hsl(${square.hue}, 80%, 50%)`;
-        defineRoundedRect(ctx, square.x, 665, 32, 32, 5);
-        ctx.fill();
-
-        const gradient = ctx.createLinearGradient(square.x, 665, square.x, 665 + 32);
-
-        gradient.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
-        gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-        ctx.fillStyle = gradient;
-        ctx.fill();
-    }
-}
-
-function drawYearsProgressbars(ctx, yearsData) {
-    const startX = 990;
-    const startY = 200;
-    const barWidth = 730;
-    const barHeight = 32;
-    const barMargin = 51;
-
-    for (let i = 0; i < yearsData.length; i++) {
+    for (let i = 0; i < barCount; i++) {
       const yearData = yearsData[i];
       const { year, scoresCount, beatmapCount } = yearData;
       const completionPercentage = scoresCount / beatmapCount * 100;
@@ -468,7 +386,8 @@ function drawYearsProgressbars(ctx, yearsData) {
       // Draw the year text
       ctx.font = `bold 22px ${font}`;
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(year, barX - 35, barY + 15);
+      ctx.textBaseline = 'middle';
+      ctx.fillText(year, barX - 35, barY + barHeight / 2);
 
       // Draw the text with shadow in the middle of the progress bar
       const text = `${completionPercentage.toFixed(2)}% ~ ${formatNumber(scoresCount)} / ${formatNumber(beatmapCount)}`;
@@ -477,7 +396,6 @@ function drawYearsProgressbars(ctx, yearsData) {
 
       ctx.font = `bold 22px ${font}`;
       ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
       ctx.fillText(text, textX, textY);
 
       // Reset the shadow settings
@@ -488,9 +406,10 @@ function drawYearsProgressbars(ctx, yearsData) {
     }
 }
 
-function drawCompletionHeader(ctx) {
-    const text = "Completion up to 2011-08-11";
-    const barY = 200 + (32 + 51) * 4; // Y-coordinate of the 5th progress bar
+function drawCompletionHeader(ctx, date, height) {
+    const text = `Completion up to ${date}`;
+    //const barY = 200 + (32 + 51) * 4; // Y-coordinate of the 5th progress bar
+    const barY = height;
 
     // Set the shadow effect for the header text
     ctx.shadowBlur = 5;
@@ -501,7 +420,7 @@ function drawCompletionHeader(ctx) {
     ctx.font = `bold 28px ${font}`;
     ctx.fillStyle = '#ffffff';
     ctx.textAlign = 'center';
-    ctx.fillText(text, 1335, barY + 80);
+    ctx.fillText(text, 890, barY + 60);
 
     // Reset the shadow settings
     ctx.shadowColor = 'transparent';
@@ -510,10 +429,10 @@ function drawCompletionHeader(ctx) {
     ctx.shadowBlur = 0;
 }
 
-function drawCompletionProgressbar(ctx, completionData) {
-    const startX = 930;
-    const startY = 200 + (32 + 51) * 4 + 130; // Y-coordinate below the completion header
-    const barWidth = 790;
+function drawCompletionProgressbar(ctx, completionData, height) {
+    const startX = 48;
+    const startY = height + 30;
+    const barWidth = 1684;
     const barHeight = 32;
 
     const completionPercentage = completionData.scoresCount / completionData.beatmapCount * 100;
@@ -564,11 +483,13 @@ function drawCompletionProgressbar(ctx, completionData) {
     ctx.shadowBlur = 0;
 }
 
-async function createImage() {
-    const data = await fetchData();
+async function createImage(user) {
+    const data = await fetchData(user);
 
+    const canvasHeight = data.beatmap_packs.length / 25 * (28 + 4) + 220
+    const yearsBarsHeight = Math.ceil((data.beatmap_packs.length + data.approved_packs.length) / 25) * (28 + 4) + 4
     // Create canvas
-    const canvas = createCanvas(1780, 760);
+    const canvas = createCanvas(1780, canvasHeight);
     const ctx = canvas.getContext('2d');
 
     // Set background color to transparent
@@ -576,21 +497,29 @@ async function createImage() {
     //ctx.fillStyle = 'rgba(56, 46, 50, 1)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    drawHeader(ctx);
-    drawPackCompletion(ctx);
-    drawDivider(ctx);
-    drawYears(ctx);
-    drawPackSquares(ctx, data.beatmap_packs);
-    drawPacksProgressbar(ctx, data.packs_completion);
-    drawLegend(ctx)
-    drawYearsProgressbars(ctx, data.years)
-    drawCompletionHeader(ctx)
-    drawCompletionProgressbar(ctx, data.completion)
+    drawPackCompletion(ctx)
+    drawYears(ctx)
+    drawPackSquares(ctx, data.beatmap_packs, data.approved_packs)
+    drawYearsProgressbars(ctx, data.years, yearsBarsHeight)
+    drawCompletionHeader(ctx, user.date, yearsBarsHeight + 40)
+    drawCompletionProgressbar(ctx, data.completion, yearsBarsHeight + 40 + 60)
+    drawDivider(ctx, yearsBarsHeight + 40 + 40)
 
     // Save PNG file
+    const fileName = `${user.user_id}_completion.png`;
+    const completeFilePath = path.join(filePath, fileName);
     const buffer = canvas.toBuffer('image/png');
     fs.writeFileSync(completeFilePath, buffer);
-    console.log('The PNG file was created.');
+    console.log(`The PNG file for ${user.user_id} was created.`);
+    return
 }
 
-createImage();
+async function main() {
+    await db.connect();
+    for (const user of users) {
+      await createImage(user);
+    }
+    await db.disconnect();
+}
+
+main()
