@@ -423,9 +423,9 @@ function drawLegend(ctx) {
 }
 
 function drawYearsProgressbars(ctx, yearsData) {
-    const startX = 1020;
+    const startX = 990;
     const startY = 200;
-    const barWidth = 700;
+    const barWidth = 730;
     const barHeight = 32;
     const barMargin = 51;
 
@@ -511,9 +511,9 @@ function drawCompletionHeader(ctx) {
 }
 
 function drawCompletionProgressbar(ctx, completionData) {
-    const startX = 960;
+    const startX = 930;
     const startY = 200 + (32 + 51) * 4 + 130; // Y-coordinate below the completion header
-    const barWidth = 760;
+    const barWidth = 790;
     const barHeight = 32;
 
     const completionPercentage = completionData.scoresCount / completionData.beatmapCount * 100;
